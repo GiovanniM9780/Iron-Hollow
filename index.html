@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0d0d12">
+<title>IRON HOLLOW — Bouw je dorp met spierkracht</title>
+
+<!-- TensorFlow.js + MoveNet pose detection -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.20.0/dist/tf-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.20.0/dist/tf-converter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+
+<style>
+/* ============================================================
+   IRON HOLLOW — Borderlands-geïnspireerde cel-shaded stijl
+   Dikke zwarte outlines, felle kleuren, comic-book textuur
+   ============================================================ */
+
+:root{
+  --ink:        #0d0d12;   /* bijna-zwart, voor outlines */
+  --paper:      #f4ead2;   /* vergeeld papier */
+  --rust:       #e8501e;   /* Borderlands oranje-rood */
+  --acid:       #c4f000;   /* gif-geel/groen accent */
+  --sky:        #3aa6c9;   /* koel blauw */
+  --plum:       #7b2d8e;   /* paars */
+  --dust:       #b89b6e;   /* zandbruin */
+  --line:       4px;
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+
+html,body{
+  height:100%;
+  overflow:hidden;
+  background:var(--ink);
+  font-family:'Trebuchet MS','Segoe UI',sans-serif;
+  color:var(--ink);
+  user-select:none;
+}
+
+/* Comic halftone-achtige body-achtergrond */
+body{
+  background-color:#15151c;
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,.04) 1px, transparent 1.5px);
+  background-size:8px 8px;
+}
+
+/* ---- Algemene knop-stijl: dikke outline, harde schaduw ---- */
+.btn{
+  font-family:inherit;
+  font-weight:900;
+  letter-spacing:.5px;
+  text-transform:uppercase;
+  border:var(--line) solid var(--ink);
+  border-radius:14px;
+  padding:14px 18px;
+  background:var(--paper);
+  color:var(--ink);
+  box-shadow:5px 5px 0 var(--ink);
+  cursor:pointer;
+  transition:transform .06s, box-shadow .06s;
+  font-size:15px;
+}
+.btn:active{ transform:translate(4px,4px); box-shadow:1px 1px 0 var(--ink); }
+.btn--go{ background:var(--acid); }
+.btn--hot{ background:var(--rust); color:var(--paper); }
+.btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+/* ============================================================
+   SCREENS
+   ============================================================ */
+.screen{ position:fixed; inset:0; display:none; flex-direction:column; }
+.screen.active{ display:flex; }
+
+/* ---- START SCREEN ---- */
+#start{
+  align-items:center; justify-content:center; text-align:center;
+  padding:24px; gap:22px;
+}
+.logo{
+  font-size:clamp(44px, 13vw, 86px);
+  font-weight:900;
+  line-height:.86;
+  color:var(--paper);
+  text-shadow:
+     var(--line) var(--line) 0 var(--ink),
+    calc(var(--line)*-1) var(--line) 0 var(--ink),
+     var(--line) calc(var(--line)*-1) 0 var(--ink),
+    calc(var(--line)*-1) calc(var(--line)*-1) 0 var(--ink),
+    8px 10px 0 rgba(0,0,0,.45);
+  transform:rotate(-3deg);
+  letter-spacing:-2px;
+}
+.logo .b{ color:var(--rust); display:block; }
+.tagline{
+  color:var(--paper); max-width:420px; font-size:16px; line-height:1.45;
+  background:rgba(0,0,0,.35); padding:12px 16px; border-radius:12px;
+  border:3px solid var(--ink);
+}
+.start-note{ color:var(--dust); font-size:12px; max-width:360px; line-height:1.4; }
+
+/* ============================================================
+   GAME SCREEN  (camera + dorp + HUD)
+   ============================================================ */
+#game{ background:#0a0a0f; }
+
+/* camera-laag */
+#cam-wrap{
+  position:absolute; inset:0; overflow:hidden; background:#000;
+}
+#video{
+  position:absolute; inset:0; width:100%; height:100%;
+  object-fit:cover; transform:scaleX(-1); /* spiegelen, voelt natuurlijk */
+  filter:saturate(1.15) contrast(1.05);
+}
+#overlay{
+  position:absolute; inset:0; width:100%; height:100%;
+  transform:scaleX(-1);
+  pointer-events:none;
+}
+/* donkere vignet zodat UI leesbaar blijft over de camera */
+#cam-wrap::after{
+  content:""; position:absolute; inset:0; pointer-events:none;
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.55) 0%, transparent 22%, transparent 60%, rgba(0,0,0,.78) 100%);
+}
+
+/* ---- TOP HUD: grondstoffen ---- */
+#hud-top{
+  position:absolute; top:0; left:0; right:0; z-index:20;
+  display:flex; gap:8px; padding:10px; flex-wrap:wrap;
+  justify-content:center;
+}
+.res{
+  display:flex; align-items:center; gap:6px;
+  background:var(--paper); border:3px solid var(--ink);
+  border-radius:10px; padding:5px 10px;
+  box-shadow:3px 3px 0 var(--ink);
+  font-weight:900; font-size:15px; min-width:64px; justify-content:center;
+}
+.res .ic{ font-size:18px; line-height:1; }
+.res.bump{ animation:bump .35s ease; }
+@keyframes bump{ 0%{transform:scale(1)} 40%{transform:scale(1.35) rotate(-4deg)} 100%{transform:scale(1)} }
+
+/* ---- CENTER: rep-teller & feedback tijdens oefenen ---- */
+#exercise-hud{
+  position:absolute; top:0; left:0; right:0; bottom:0; z-index:15;
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+  pointer-events:none;
+}
+#exercise-hud.on{ display:flex; }
+#rep-count{
+  font-size:34vw; font-weight:900; color:var(--paper); line-height:1;
+  text-shadow:6px 6px 0 var(--ink), -3px -3px 0 var(--ink), 3px -3px 0 var(--ink), -3px 3px 0 var(--ink);
+}
+#rep-count.pop{ animation:pop .25s ease; }
+@keyframes pop{ 0%{transform:scale(1)} 50%{transform:scale(1.25)} 100%{transform:scale(1)} }
+#ex-name{
+  font-size:24px; font-weight:900; text-transform:uppercase; letter-spacing:1px;
+  color:var(--acid); background:var(--ink); padding:6px 16px; border-radius:10px;
+  border:3px solid var(--acid); margin-top:6px;
+}
+#ex-feedback{
+  margin-top:14px; font-size:18px; font-weight:900; color:var(--paper);
+  background:rgba(0,0,0,.6); padding:8px 16px; border-radius:10px; min-height:20px;
+  text-align:center; max-width:80vw;
+}
+#ex-target{
+  margin-top:10px; font-size:15px; color:var(--paper); font-weight:700;
+  background:rgba(0,0,0,.5); padding:5px 12px; border-radius:8px;
+}
+
+/* depth-bar: laat zien hoe diep je gaat (rep-progressie) */
+#depth-wrap{
+  position:absolute; right:14px; top:18%; bottom:24%; width:22px; z-index:16;
+  background:rgba(0,0,0,.45); border:3px solid var(--ink); border-radius:12px;
+  display:none; overflow:hidden;
+}
+#depth-wrap.on{ display:block; }
+#depth-fill{
+  position:absolute; left:0; right:0; bottom:0; height:0%;
+  background:linear-gradient(180deg,var(--acid),var(--rust));
+  transition:height .08s linear;
+}
+
+/* ---- BOTTOM HUD: dorp-knop + oefen-knoppen ---- */
+#hud-bottom{
+  position:absolute; left:0; right:0; bottom:0; z-index:20;
+  padding:12px; display:flex; flex-direction:column; gap:10px;
+}
+#ex-buttons{ display:flex; gap:8px; justify-content:center; flex-wrap:wrap; }
+.ex-btn{
+  flex:1 1 0; min-width:70px; max-width:120px;
+  font-family:inherit; font-weight:900; text-transform:uppercase;
+  border:var(--line) solid var(--ink); border-radius:12px;
+  padding:10px 6px; background:var(--paper); color:var(--ink);
+  box-shadow:4px 4px 0 var(--ink); cursor:pointer; font-size:12px;
+  display:flex; flex-direction:column; align-items:center; gap:2px;
+  transition:transform .06s, box-shadow .06s;
+}
+.ex-btn .emoji{ font-size:22px; }
+.ex-btn .yield{ font-size:10px; opacity:.7; }
+.ex-btn:active{ transform:translate(3px,3px); box-shadow:1px 1px 0 var(--ink); }
+.ex-btn.active{ background:var(--acid); }
+
+#bottom-row{ display:flex; gap:8px; }
+#bottom-row .btn{ flex:1; padding:12px; font-size:14px; }
+
+/* stop-knop tijdens oefening */
+#stop-ex{
+  position:absolute; top:54px; right:10px; z-index:25; display:none;
+  padding:8px 14px; font-size:13px;
+}
+#stop-ex.on{ display:block; }
+
+/* ============================================================
+   VILLAGE SCREEN  (je dorp + bouwen)
+   ============================================================ */
+#village{ background:#1b2a16; }
+#village{
+  background-color:#1b2a16;
+  background-image:
+    radial-gradient(circle, rgba(0,0,0,.18) 1px, transparent 1.5px);
+  background-size:10px 10px;
+}
+#vil-header{
+  z-index:5;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px; gap:10px;
+  border-bottom:var(--line) solid var(--ink);
+  background:var(--rust);
+}
+#vil-header h2{
+  color:var(--paper); font-size:22px; font-weight:900; text-transform:uppercase;
+  text-shadow:2px 2px 0 var(--ink); letter-spacing:1px;
+}
+#vil-res{ display:flex; gap:6px; flex-wrap:wrap; }
+#vil-res .res{ font-size:13px; min-width:54px; padding:4px 8px; }
+
+/* het dorp-canvas / grid */
+#vil-scroll{ flex:1; overflow-y:auto; padding:14px; }
+#village-scene{
+  position:relative;
+  min-height:240px;
+  border:var(--line) solid var(--ink);
+  border-radius:16px;
+  background:
+    linear-gradient(180deg,#7cc3e8 0%, #a9dc6b 45%, #6fae3e 100%);
+  box-shadow:6px 6px 0 rgba(0,0,0,.4);
+  overflow:hidden;
+  padding:10px;
+  display:flex; flex-wrap:wrap; gap:10px; align-content:flex-start;
+  margin-bottom:16px;
+}
+.placed{
+  width:74px; height:74px; display:flex; align-items:center; justify-content:center;
+  font-size:42px; filter:drop-shadow(3px 3px 0 rgba(0,0,0,.4));
+  animation:drop .4s cubic-bezier(.2,1.4,.5,1);
+}
+@keyframes drop{ 0%{transform:translateY(-40px) scale(.4); opacity:0} 100%{transform:none; opacity:1} }
+.empty-village{ color:var(--paper); font-weight:900; text-align:center; width:100%; padding:40px 10px; font-size:16px; text-shadow:1px 1px 0 var(--ink); }
+
+/* shop / bouwlijst */
+.shop-title{
+  color:var(--paper); font-weight:900; text-transform:uppercase; font-size:18px;
+  margin:6px 2px 10px; text-shadow:2px 2px 0 var(--ink); letter-spacing:1px;
+}
+.build-card{
+  display:flex; align-items:center; gap:12px;
+  background:var(--paper); border:var(--line) solid var(--ink); border-radius:14px;
+  padding:12px; margin-bottom:12px; box-shadow:4px 4px 0 var(--ink);
+}
+.build-card .bemoji{ font-size:40px; flex:0 0 auto; }
+.build-card .binfo{ flex:1; min-width:0; }
+.build-card .bname{ font-weight:900; font-size:17px; text-transform:uppercase; }
+.build-card .bdesc{ font-size:12px; color:#5a4a2e; margin:2px 0 6px; }
+.build-card .bcost{ display:flex; gap:8px; flex-wrap:wrap; font-size:13px; font-weight:900; }
+.build-card .cost-chip{ display:flex; align-items:center; gap:3px; background:#fff; border:2px solid var(--ink); border-radius:7px; padding:2px 7px; }
+.build-card .cost-chip.lack{ color:var(--rust); }
+.build-card .buy{ flex:0 0 auto; }
+
+/* tellertje van hoeveel je er al hebt */
+.owned-badge{
+  background:var(--ink); color:var(--acid); font-size:11px; font-weight:900;
+  border-radius:6px; padding:1px 6px; margin-left:6px;
+}
+
+/* ============================================================
+   TOAST / loader
+   ============================================================ */
+#toast{
+  position:fixed; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px);
+  z-index:60; background:var(--ink); color:var(--acid);
+  border:3px solid var(--acid); border-radius:12px; padding:10px 18px;
+  font-weight:900; font-size:15px; opacity:0; transition:opacity .25s, transform .25s;
+  pointer-events:none; text-align:center; max-width:88vw;
+}
+#toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+#loader{
+  position:fixed; inset:0; z-index:80; background:rgba(13,13,18,.94);
+  display:none; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+  color:var(--paper); text-align:center; padding:24px;
+}
+#loader.on{ display:flex; }
+.spinner{
+  width:54px; height:54px; border:6px solid rgba(244,234,210,.25);
+  border-top-color:var(--acid); border-radius:50%; animation:spin 1s linear infinite;
+}
+@keyframes spin{ to{ transform:rotate(360deg); } }
+#loader .lmsg{ font-weight:900; font-size:17px; }
+#loader .lsub{ font-size:13px; color:var(--dust); max-width:320px; line-height:1.4; }
+
+/* foutmelding-vak */
+#err{
+  position:fixed; inset:auto 16px 16px 16px; z-index:90;
+  background:var(--rust); color:var(--paper); border:var(--line) solid var(--ink);
+  border-radius:12px; padding:14px; font-size:14px; font-weight:700;
+  display:none; box-shadow:5px 5px 0 var(--ink);
+}
+#err.on{ display:block; }
+#err b{ display:block; font-size:16px; margin-bottom:4px; text-transform:uppercase; }
+
+/* kleine "calibreer" hint-kader middenin camera */
+#frame-guide{
+  position:absolute; inset:0; z-index:14; pointer-events:none;
+  display:none; align-items:center; justify-content:center;
+}
+#frame-guide.on{ display:flex; }
+#frame-guide .box{
+  border:4px dashed var(--acid); border-radius:20px;
+  width:70%; height:78%; opacity:.6;
+}
+#frame-guide .hint{
+  position:absolute; bottom:30%; background:rgba(0,0,0,.7); color:var(--paper);
+  padding:8px 14px; border-radius:10px; font-weight:900; font-size:14px; text-align:center;
+}
+</style>
+</head>
+<body>
+
+<!-- ============ START SCREEN ============ -->
+<section id="start" class="screen active">
+  <h1 class="logo">IRON<span class="b">HOLLOW</span></h1>
+  <p class="tagline">Elke rep bouwt je dorp. Squats, push-ups, jumping jacks en sit-ups leveren grondstoffen — verbouw ze tot een bloeiende nederzetting.</p>
+  <button id="btn-start" class="btn btn--go">📷 Camera aan & spelen</button>
+  <p class="start-note">Geef cameratoestemming wanneer je telefoon erom vraagt. Zet je telefoon neer zodat je hele lichaam in beeld is. Werkt het beste in goed licht.</p>
+</section>
+
+<!-- ============ GAME (CAMERA) SCREEN ============ -->
+<section id="game" class="screen">
+  <div id="cam-wrap">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <!-- grondstoffen bovenin -->
+  <div id="hud-top"></div>
+
+  <!-- frame-hint -->
+  <div id="frame-guide">
+    <div class="box"></div>
+    <div class="hint">Zorg dat je hele lichaam in het kader past</div>
+  </div>
+
+  <!-- rep-teller / feedback -->
+  <div id="exercise-hud">
+    <div id="rep-count">0</div>
+    <div id="ex-name">—</div>
+    <div id="ex-target"></div>
+    <div id="ex-feedback"></div>
+  </div>
+  <div id="depth-wrap"><div id="depth-fill"></div></div>
+
+  <button id="stop-ex" class="btn btn--hot">■ Stop</button>
+
+  <!-- onderbalk -->
+  <div id="hud-bottom">
+    <div id="ex-buttons"></div>
+    <div id="bottom-row">
+      <button id="btn-village" class="btn">🏘️ Mijn dorp</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ VILLAGE SCREEN ============ -->
+<section id="village" class="screen">
+  <div id="vil-header">
+    <h2>🏘️ Iron Hollow</h2>
+    <div id="vil-res"></div>
+  </div>
+  <div id="vil-scroll">
+    <div id="village-scene"></div>
+    <div class="shop-title">⚒️ Bouwen</div>
+    <div id="shop"></div>
+    <button id="btn-back" class="btn btn--go" style="width:100%; margin-top:6px;">💪 Terug naar trainen</button>
+  </div>
+</section>
+
+<!-- ============ OVERLAYS ============ -->
+<div id="toast"></div>
+<div id="loader">
+  <div class="spinner"></div>
+  <div class="lmsg">AI-model laden…</div>
+  <div class="lsub">De bewegingsherkenning wordt voorbereid. Dit kan de eerste keer 10–20 seconden duren.</div>
+</div>
+<div id="err"></div>
+
+<script>
+/* ================================================================
+   IRON HOLLOW  — game logic
+   - MoveNet pose detection telt reps via gewrichtshoeken
+   - reps -> grondstoffen -> gebouwen
+   ================================================================ */
+
+/* ---------- mini DOM helpers ---------- */
+const $  = (s)=>document.querySelector(s);
+const $$ = (s)=>document.querySelectorAll(s);
+function show(id){ $$('.screen').forEach(s=>s.classList.remove('active')); $(id).classList.add('active'); }
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1900); }
+function showErr(title, body){ const e=$('#err'); e.innerHTML='<b>'+title+'</b>'+body; e.classList.add('on'); }
+function hideErr(){ $('#err').classList.remove('on'); }
+
+/* ================================================================
+   1. GAME STATE  — grondstoffen & gebouwen
+   ================================================================ */
+const RES = {
+  wood:  {ic:'🪵', name:'Hout'},
+  stone: {ic:'🪨', name:'Steen'},
+  food:  {ic:'🌾', name:'Voedsel'},
+  gold:  {ic:'🪙', name:'Goud'},
+};
+
+const state = {
+  res:   { wood:0, stone:0, food:0, gold:0 },
+  built: {},          // id -> aantal
+};
+
+/* ---------- opslaan / laden via in-memory (geen localStorage in sandbox) ----------
+   Op je eigen host kun je localStorage aanzetten; zie comment onderaan. */
+
+/* ================================================================
+   2. OEFENINGEN  — welke grondstof levert wat op
+   ================================================================ */
+const EXERCISES = {
+  squat:    { name:'Squats',       emoji:'🦵', res:'wood',  per:1, yield:'+1 🪵 / rep' },
+  pushup:   { name:'Push-ups',     emoji:'💪', res:'stone', per:1, yield:'+1 🪨 / rep' },
+  jacks:    { name:'Jumping jacks',emoji:'🤸', res:'food',  per:1, yield:'+1 🌾 / rep' },
+  situp:    { name:'Sit-ups',      emoji:'🔥', res:'gold',  per:1, yield:'+1 🪙 / rep' },
+};
+
+/* ================================================================
+   3. GEBOUWEN  — kosten & opbrengst
+   ================================================================ */
+const BUILDINGS = [
+  { id:'tent',     emoji:'⛺', name:'Tent',          desc:'Het bescheiden begin van je nederzetting.',  cost:{wood:5} },
+  { id:'sawmill',  emoji:'🪚', name:'Houtzagerij',    desc:'Verwerkt boomstammen tot planken.',          cost:{wood:20} },
+  { id:'house',    emoji:'🏠', name:'Houten huis',    desc:'Onderdak voor je eerste bewoners.',          cost:{wood:30, stone:10} },
+  { id:'farm',     emoji:'🌽', name:'Boerderij',      desc:'Verbouwt voedsel voor het dorp.',            cost:{wood:15, food:20} },
+  { id:'quarry',   emoji:'⛏️', name:'Steengroeve',    desc:'Wint steen uit de heuvels.',                 cost:{wood:25, stone:25} },
+  { id:'well',     emoji:'⛲', name:'Waterput',        desc:'Vers water voor iedereen.',                  cost:{stone:30} },
+  { id:'mill',     emoji:'🌾', name:'Korenmolen',     desc:'Maalt graan tot meel.',                      cost:{wood:40, food:30} },
+  { id:'tavern',   emoji:'🍺', name:'Taverne',        desc:'Waar dorpelingen samenkomen.',               cost:{wood:50, stone:30, gold:15} },
+  { id:'smithy',   emoji:'⚒️', name:'Smederij',       desc:'Smeedt gereedschap en wapens.',              cost:{stone:50, gold:25} },
+  { id:'market',   emoji:'🏪', name:'Marktplein',     desc:'Handel laat het goud stromen.',              cost:{wood:60, food:40, gold:30} },
+  { id:'church',   emoji:'⛪', name:'Kapel',          desc:'Een baken van rust en hoop.',                cost:{stone:80, gold:40} },
+  { id:'tower',    emoji:'🗼', name:'Wachttoren',     desc:'Bewaakt de grenzen van Iron Hollow.',        cost:{wood:70, stone:90, gold:50} },
+  { id:'castle',   emoji:'🏰', name:'Kasteel',        desc:'Het kroonjuweel van je dorp.',               cost:{wood:120, stone:150, food:80, gold:100} },
+];
+
+/* ================================================================
+   4. HUD RENDERING
+   ================================================================ */
+function renderResBar(){
+  const top = $('#hud-top');
+  const vil = $('#vil-res');
+  const html = Object.keys(RES).map(k=>
+    `<div class="res" data-res="${k}"><span class="ic">${RES[k].ic}</span><span class="val">${state.res[k]}</span></div>`
+  ).join('');
+  top.innerHTML = html;
+  vil.innerHTML = html;
+}
+function bumpRes(resKey){
+  $$(`.res[data-res="${resKey}"]`).forEach(el=>{
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+  });
+}
+function addRes(resKey, amt){
+  state.res[resKey] += amt;
+  renderResBar();
+  bumpRes(resKey);
+}
+
+/* ---------- oefen-knoppen ---------- */
+function renderExButtons(){
+  const wrap = $('#ex-buttons');
+  wrap.innerHTML = Object.keys(EXERCISES).map(id=>{
+    const e = EXERCISES[id];
+    return `<button class="ex-btn" data-ex="${id}">
+      <span class="emoji">${e.emoji}</span>
+      <span>${e.name}</span>
+      <span class="yield">${e.yield}</span>
+    </button>`;
+  }).join('');
+  $$('.ex-btn').forEach(b=>b.addEventListener('click', ()=>startExercise(b.dataset.ex)));
+}
+
+/* ================================================================
+   5. VILLAGE / SHOP RENDERING
+   ================================================================ */
+function renderVillage(){
+  const scene = $('#village-scene');
+  const placed = [];
+  BUILDINGS.forEach(b=>{
+    const n = state.built[b.id]||0;
+    for(let i=0;i<n;i++) placed.push(`<div class="placed" title="${b.name}">${b.emoji}</div>`);
+  });
+  scene.innerHTML = placed.length
+    ? placed.join('')
+    : `<div class="empty-village">Nog leeg hier…<br>Train, verdien grondstoffen en bouw je eerste gebouw! ⛺</div>`;
+}
+
+function canAfford(cost){
+  return Object.keys(cost).every(k=> state.res[k] >= cost[k]);
+}
+function renderShop(){
+  const shop = $('#shop');
+  shop.innerHTML = BUILDINGS.map(b=>{
+    const owned = state.built[b.id]||0;
+    const costHtml = Object.keys(b.cost).map(k=>{
+      const lack = state.res[k] < b.cost[k];
+      return `<span class="cost-chip ${lack?'lack':''}">${RES[k].ic} ${b.cost[k]}</span>`;
+    }).join('');
+    const afford = canAfford(b.cost);
+    return `<div class="build-card">
+      <div class="bemoji">${b.emoji}</div>
+      <div class="binfo">
+        <div class="bname">${b.name}${owned?`<span class="owned-badge">x${owned}</span>`:''}</div>
+        <div class="bdesc">${b.desc}</div>
+        <div class="bcost">${costHtml}</div>
+      </div>
+      <button class="btn buy ${afford?'btn--go':''}" data-build="${b.id}" ${afford?'':'disabled'}>Bouw</button>
+    </div>`;
+  }).join('');
+  $$('[data-build]').forEach(btn=>btn.addEventListener('click',()=>buy(btn.dataset.build)));
+}
+function buy(id){
+  const b = BUILDINGS.find(x=>x.id===id);
+  if(!b || !canAfford(b.cost)) return;
+  Object.keys(b.cost).forEach(k=> state.res[k]-=b.cost[k]);
+  state.built[id] = (state.built[id]||0)+1;
+  renderResBar(); renderVillage(); renderShop();
+  toast(`${b.emoji} ${b.name} gebouwd!`);
+}
+
+/* ================================================================
+   6. POSE DETECTION  — MoveNet
+   ================================================================ */
+let detector = null;
+let video    = null;
+let rafId    = null;
+let running  = false;
+
+async function setupCamera(){
+  video = $('#video');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio:false,
+    video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} }
+  });
+  video.srcObject = stream;
+  await new Promise(res=>{ video.onloadedmetadata = ()=>res(); });
+  await video.play();
+  // canvas afmeting koppelen
+  const ov = $('#overlay');
+  ov.width = video.videoWidth; ov.height = video.videoHeight;
+}
+
+async function loadModel(){
+  await tf.setBackend('webgl');
+  await tf.ready();
+  detector = await poseDetection.createDetector(
+    poseDetection.SupportedModels.MoveNet,
+    { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+  );
+}
+
+/* ---------- hoek tussen drie punten (in graden) ---------- */
+function angle(a,b,c){
+  if(!a||!b||!c) return null;
+  const ab = {x:a.x-b.x, y:a.y-b.y};
+  const cb = {x:c.x-b.x, y:c.y-b.y};
+  const dot = ab.x*cb.x + ab.y*cb.y;
+  const magAB = Math.hypot(ab.x,ab.y), magCB = Math.hypot(cb.x,cb.y);
+  if(!magAB||!magCB) return null;
+  let cos = dot/(magAB*magCB);
+  cos = Math.max(-1,Math.min(1,cos));
+  return Math.acos(cos)*180/Math.PI;
+}
+function kp(pose, name){
+  const p = pose.keypoints.find(k=>k.name===name);
+  return (p && p.score>0.3) ? p : null;
+}
+
+/* ---------- teken skelet over de camera ---------- */
+const SKELETON = [
+  ['left_shoulder','right_shoulder'],['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
+  ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],
+  ['left_shoulder','left_hip'],['right_shoulder','right_hip'],['left_hip','right_hip'],
+  ['left_hip','left_knee'],['left_knee','left_ankle'],
+  ['right_hip','right_knee'],['right_knee','right_ankle'],
+];
+function drawPose(pose){
+  const ov = $('#overlay'); const ctx = ov.getContext('2d');
+  ctx.clearRect(0,0,ov.width,ov.height);
+  if(!pose) return;
+  ctx.lineWidth = 6; ctx.strokeStyle = '#c4f000'; ctx.lineCap='round';
+  SKELETON.forEach(([a,b])=>{
+    const pa=kp(pose,a), pb=kp(pose,b);
+    if(pa&&pb){ ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); }
+  });
+  pose.keypoints.forEach(p=>{
+    if(p.score>0.3){
+      ctx.beginPath(); ctx.arc(p.x,p.y,7,0,Math.PI*2);
+      ctx.fillStyle='#e8501e'; ctx.fill();
+      ctx.lineWidth=3; ctx.strokeStyle='#0d0d12'; ctx.stroke();
+    }
+  });
+}
+
+/* ================================================================
+   7. REP-TELLERS per oefening
+   Elke oefening = een toestandsmachine (down/up) op basis van een hoek
+   ================================================================ */
+let activeEx = null;
+let reps = 0;
+let phase = 'up';          // 'up' of 'down'
+const repState = { lastAngle:null };
+
+const EX_LOGIC = {
+  // SQUAT: knie-hoek. diep = klein (~70°), staand = groot (~170°)
+  squat:{
+    measure(pose){
+      const hip=kp(pose,'left_hip')||kp(pose,'right_hip');
+      const knee=kp(pose,'left_knee')||kp(pose,'right_knee');
+      const ankle=kp(pose,'left_ankle')||kp(pose,'right_ankle');
+      return angle(hip,knee,ankle);
+    },
+    down:100, up:160, depthLo:160, depthHi:90,
+    hintDown:'Ga dieper door je knieën!', hintUp:'Sta op — strek je benen!'
+  },
+  // PUSH-UP: elleboog-hoek. laag = klein (~80°), gestrekt = groot (~160°)
+  pushup:{
+    measure(pose){
+      const sh=kp(pose,'left_shoulder')||kp(pose,'right_shoulder');
+      const el=kp(pose,'left_elbow')||kp(pose,'right_elbow');
+      const wr=kp(pose,'left_wrist')||kp(pose,'right_wrist');
+      return angle(sh,el,wr);
+    },
+    down:95, up:150, depthLo:160, depthHi:80,
+    hintDown:'Zak verder door je armen!', hintUp:'Duw jezelf omhoog!'
+  },
+  // JUMPING JACKS: pols-hoogte t.o.v. schouder. armen omhoog = polsen boven schouders
+  jacks:{
+    measure(pose){
+      // we meten gemiddelde pols-y t.o.v. schouder-y; lager getal = hoger in beeld
+      const lw=kp(pose,'left_wrist'), rw=kp(pose,'right_wrist');
+      const ls=kp(pose,'left_shoulder'), rs=kp(pose,'right_shoulder');
+      if(!ls||!rs) return null;
+      const shY=(ls.y+rs.y)/2;
+      let wy=[]; if(lw)wy.push(lw.y); if(rw)wy.push(rw.y);
+      if(!wy.length) return null;
+      const wristY = wy.reduce((a,b)=>a+b,0)/wy.length;
+      // verschil omzetten naar pseudo-"hoek": polsen boven schouder => groot getal
+      return shY - wristY; // >0 als armen omhoog
+    },
+    down:-30, up:30, depthLo:-60, depthHi:60, isJacks:true,
+    hintDown:'Armen omlaag!', hintUp:'Armen helemaal omhoog!'
+  },
+  // SIT-UP: romp-hoek (schouder-heup-knie). liggend = groot, rechtop = klein
+  situp:{
+    measure(pose){
+      const sh=kp(pose,'left_shoulder')||kp(pose,'right_shoulder');
+      const hip=kp(pose,'left_hip')||kp(pose,'right_hip');
+      const knee=kp(pose,'left_knee')||kp(pose,'right_knee');
+      return angle(sh,hip,knee);
+    },
+    down:110, up:150, depthLo:160, depthHi:90, invert:true,
+    hintDown:'Kom omhoog met je romp!', hintUp:'Lig terug.'
+  },
+};
+
+function startExercise(id){
+  activeEx = id; reps = 0; phase = 'up'; repState.lastAngle=null;
+  $('#exercise-hud').classList.add('on');
+  $('#depth-wrap').classList.add('on');
+  $('#stop-ex').classList.add('on');
+  $('#frame-guide').classList.add('on');
+  $('#rep-count').textContent='0';
+  $('#ex-name').textContent = EXERCISES[id].name;
+  $('#ex-target').textContent = EXERCISES[id].yield;
+  $('#ex-feedback').textContent='Maak je klaar…';
+  $$('.ex-btn').forEach(b=>b.classList.toggle('active', b.dataset.ex===id));
+  $('#hud-bottom').style.opacity='.25';
+  setTimeout(()=>{ $('#frame-guide').classList.remove('on'); },2500);
+}
+function stopExercise(){
+  if(activeEx && reps>0) toast(`💪 ${reps} ${EXERCISES[activeEx].name} — sterk!`);
+  activeEx=null;
+  $('#exercise-hud').classList.remove('on');
+  $('#depth-wrap').classList.remove('on');
+  $('#stop-ex').classList.remove('on');
+  $('#frame-guide').classList.remove('on');
+  $$('.ex-btn').forEach(b=>b.classList.remove('active'));
+  $('#hud-bottom').style.opacity='1';
+  $('#overlay').getContext('2d').clearRect(0,0,$('#overlay').width,$('#overlay').height);
+}
+
+function processRep(pose){
+  const logic = EX_LOGIC[activeEx];
+  const val = logic.measure(pose);
+  if(val===null){ $('#ex-feedback').textContent='Ik zie je niet helemaal — ga iets verder van de camera.'; return; }
+
+  // depth-bar updaten
+  let pct;
+  if(logic.isJacks){
+    pct = (val - logic.depthLo) / (logic.depthHi - logic.depthLo);
+  } else if(logic.invert){
+    pct = (logic.depthLo - val) / (logic.depthLo - logic.depthHi);
+  } else {
+    pct = (logic.depthLo - val) / (logic.depthLo - logic.depthHi);
+  }
+  pct = Math.max(0, Math.min(1, pct));
+  $('#depth-fill').style.height = (pct*100)+'%';
+
+  // toestandsmachine: van 'up' naar 'down' en terug = 1 rep
+  // bepaal of we in 'down' of 'up' zone zitten
+  let inDown, inUp;
+  if(logic.isJacks){
+    inDown = val <= logic.down;   // armen laag
+    inUp   = val >= logic.up;     // armen hoog
+  } else if(logic.invert){
+    // situp: 'down' = liggend (grote hoek), 'up' = rechtop (kleine hoek)
+    inDown = val >= logic.up;     // liggend
+    inUp   = val <= logic.down;   // omhoog
+  } else {
+    inDown = val <= logic.down;   // diep
+    inUp   = val >= logic.up;     // gestrekt
+  }
+
+  if(phase==='up' && inDown){
+    phase='down';
+    $('#ex-feedback').textContent = logic.hintUp;
+  } else if(phase==='down' && inUp){
+    phase='up';
+    countRep();
+  } else {
+    // tussenzone-hint
+    if(phase==='up') $('#ex-feedback').textContent = logic.hintDown;
+    else             $('#ex-feedback').textContent = logic.hintUp;
+  }
+}
+
+function countRep(){
+  reps++;
+  const rc = $('#rep-count');
+  rc.textContent = reps;
+  rc.classList.remove('pop'); void rc.offsetWidth; rc.classList.add('pop');
+  $('#ex-feedback').textContent = '💥 Goed zo!';
+  // grondstof toekennen
+  const ex = EXERCISES[activeEx];
+  addRes(ex.res, ex.per);
+}
+
+/* ================================================================
+   8. DETECTIE-LOOP
+   ================================================================ */
+async function loop(){
+  if(!running){ return; }
+  if(detector && video.readyState>=2){
+    let poses=[];
+    try{ poses = await detector.estimatePoses(video, {maxPoses:1, flipHorizontal:false}); }
+    catch(e){ /* skip frame */ }
+    const pose = poses[0];
+    drawPose(pose);
+    if(pose && activeEx){ processRep(pose); }
+  }
+  rafId = requestAnimationFrame(loop);
+}
+
+/* ================================================================
+   9. BOOT
+   ================================================================ */
+async function boot(){
+  hideErr();
+  $('#loader').classList.add('on');
+  try{
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('no-camera-api');
+    }
+    $('.lmsg') && ($('#loader .lmsg').textContent='Camera starten…');
+    await setupCamera();
+    $('#loader .lmsg').textContent='AI-model laden…';
+    await loadModel();
+    running = true;
+    loop();
+    $('#loader').classList.remove('on');
+    show('#game');
+    toast('Kies een oefening om te beginnen! 💪');
+  }catch(err){
+    $('#loader').classList.remove('on');
+    console.error(err);
+    let title='Er ging iets mis', body='Probeer de pagina te herladen.';
+    if(err && (err.name==='NotAllowedError' || err.name==='SecurityError')){
+      title='Cameratoegang geweigerd';
+      body='Geef toestemming voor de camera in je browser-instellingen en herlaad de pagina. Let op: dit werkt alleen via een https-adres (zoals GitHub Pages).';
+    } else if(err && err.name==='NotFoundError'){
+      title='Geen camera gevonden';
+      body='Er is geen camera beschikbaar op dit apparaat.';
+    } else if(err && err.message==='no-camera-api'){
+      title='Camera niet beschikbaar';
+      body='Deze omgeving geeft geen toegang tot de camera. Host de app via https (bv. GitHub Pages) en open hem op je telefoon.';
+    }
+    showErr(title, body);
+  }
+}
+
+/* ================================================================
+   10. EVENTS & INIT
+   ================================================================ */
+$('#btn-start').addEventListener('click', boot);
+$('#btn-village').addEventListener('click', ()=>{ renderVillage(); renderShop(); show('#village'); });
+$('#btn-back').addEventListener('click', ()=>{ show('#game'); });
+$('#stop-ex').addEventListener('click', stopExercise);
+
+renderResBar();
+renderExButtons();
+
+/* ----------------------------------------------------------------
+   WIL JE VOORTGANG OPSLAAN OP JE EIGEN HOST?
+   In de chat-sandbox is localStorage uit. Op je eigen site werkt het wel.
+   Vervang het `state`-blok dan met load/save zoals:
+
+     function save(){ localStorage.setItem('ironhollow', JSON.stringify(state)); }
+     function load(){ const s=localStorage.getItem('ironhollow'); if(s) Object.assign(state, JSON.parse(s)); }
+   en roep save() aan in addRes() en buy(), en load() bij init.
+   ---------------------------------------------------------------- */
+</script>
+</body>
+</html>
