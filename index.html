@@ -6,11 +6,8 @@
 <meta name="theme-color" content="#0d0d12">
 <title>IRON HOLLOW — Bouw je dorp met spierkracht</title>
 
-<!-- TensorFlow.js + MoveNet pose detection -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.20.0/dist/tf-core.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.20.0/dist/tf-converter.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@4.20.0/dist/tf-backend-cpu.min.js"></script>
+<!-- TensorFlow.js (union bundle: bevat core + webgl/cpu backends) + MoveNet pose detection -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
 
 <style>
@@ -603,23 +600,14 @@ async function setupCamera(){
 }
 
 async function loadModel(){
-  // kies een werkende backend: probeer WebGL, anders CPU
-  async function pickBackend(){
-    const available = tf.engine().registryFactory
-      ? Object.keys(tf.engine().registryFactory) : [];
-    // probeer eerst webgl
-    if(available.includes('webgl')){
-      try{ await tf.setBackend('webgl'); await tf.ready(); return; }
-      catch(e){ console.warn('WebGL faalde', e); }
-    }
-    // val terug op cpu als die er is
-    if(available.includes('cpu')){
-      await tf.setBackend('cpu'); await tf.ready(); return;
-    }
-    // laatste redmiddel: laat tf zelf kiezen
-    await tf.ready();
+  // union bundle bevat webgl + cpu; probeer webgl, val anders terug op cpu
+  try{
+    await tf.setBackend('webgl'); await tf.ready();
+  }catch(e){
+    console.warn('WebGL niet beschikbaar, gebruik CPU', e);
+    try{ await tf.setBackend('cpu'); await tf.ready(); }
+    catch(e2){ await tf.ready(); }
   }
-  await pickBackend();
   detector = await poseDetection.createDetector(
     poseDetection.SupportedModels.MoveNet,
     { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
@@ -839,6 +827,10 @@ async function boot(){
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       throw new Error('no-camera-api');
     }
+    // controleer of de AI-bibliotheken geladen zijn
+    if(typeof tf==='undefined' || typeof poseDetection==='undefined'){
+      throw new Error('libs-not-loaded');
+    }
     $('.lmsg') && ($('#loader .lmsg').textContent='Camera starten…');
     await setupCamera();
     $('#loader .lmsg').textContent='AI-model laden…';
@@ -867,6 +859,9 @@ async function boot(){
     } else if(err && err.message==='no-camera-api'){
       title='Camera niet beschikbaar';
       body='Deze omgeving geeft geen toegang tot de camera. Open de link via https in Safari (niet in een in-app browser).';
+    } else if(err && err.message==='libs-not-loaded'){
+      title='AI-bibliotheek niet geladen';
+      body='De bewegingsherkenning kon niet laden — meestal een tijdelijk internet/CDN-probleem. Ververs de pagina (Ctrl+Shift+R) en probeer opnieuw.';
     }
     // toon ook de echte technische fout zodat we kunnen debuggen
     body += '<br><br><span style="font-size:11px;opacity:.85;">Technisch: '
