@@ -566,21 +566,51 @@ let running  = false;
 
 async function setupCamera(){
   video = $('#video');
+  // iOS Safari vereist deze attributen + dat play() na een tap gebeurt
+  video.setAttribute('playsinline','');
+  video.setAttribute('muted','');
+  video.muted = true;
+
   const stream = await navigator.mediaDevices.getUserMedia({
     audio:false,
     video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} }
   });
   video.srcObject = stream;
-  await new Promise(res=>{ video.onloadedmetadata = ()=>res(); });
-  await video.play();
-  // canvas afmeting koppelen
+
+  // wacht tot de video echt afmetingen heeft (iOS kan onloadedmetadata missen
+  // als die al gevuurd is, dus we pollen er ook op)
+  await new Promise((resolve, reject)=>{
+    let done=false;
+    const finish=()=>{ if(!done){ done=true; resolve(); } };
+    if(video.readyState>=1 && video.videoWidth>0){ finish(); return; }
+    video.onloadedmetadata = finish;
+    video.onloadeddata = finish;
+    // veiligheidstimer: na 8s opgeven met duidelijke fout
+    setTimeout(()=>{ if(!done){ done=true; reject(new Error('video-timeout')); } }, 8000);
+  });
+
+  try{ await video.play(); }
+  catch(e){ /* iOS kan een onschuldige AbortError gooien; negeren */ }
+
+  // poll tot videoWidth bekend is (soms 0 direct na play op iOS)
+  let tries=0;
+  while(video.videoWidth===0 && tries<40){ await new Promise(r=>setTimeout(r,50)); tries++; }
+
   const ov = $('#overlay');
-  ov.width = video.videoWidth; ov.height = video.videoHeight;
+  ov.width  = video.videoWidth  || 640;
+  ov.height = video.videoHeight || 480;
 }
 
 async function loadModel(){
-  await tf.setBackend('webgl');
-  await tf.ready();
+  // probeer WebGL; val terug op CPU als dat faalt (scommige iOS-versies)
+  try{
+    await tf.setBackend('webgl');
+    await tf.ready();
+  }catch(e){
+    console.warn('WebGL faalde, val terug op CPU', e);
+    await tf.setBackend('cpu');
+    await tf.ready();
+  }
   detector = await poseDetection.createDetector(
     poseDetection.SupportedModels.MoveNet,
     { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
@@ -815,14 +845,24 @@ async function boot(){
     let title='Er ging iets mis', body='Probeer de pagina te herladen.';
     if(err && (err.name==='NotAllowedError' || err.name==='SecurityError')){
       title='Cameratoegang geweigerd';
-      body='Geef toestemming voor de camera in je browser-instellingen en herlaad de pagina. Let op: dit werkt alleen via een https-adres (zoals GitHub Pages).';
+      body='Geef toestemming voor de camera in je browser-instellingen en herlaad de pagina. Op iPhone: Instellingen → Safari → Camera → Vragen.';
     } else if(err && err.name==='NotFoundError'){
       title='Geen camera gevonden';
       body='Er is geen camera beschikbaar op dit apparaat.';
+    } else if(err && err.name==='NotReadableError'){
+      title='Camera in gebruik';
+      body='De camera wordt door een andere app gebruikt. Sluit andere apps die de camera gebruiken en probeer opnieuw.';
+    } else if(err && err.message==='video-timeout'){
+      title='Camerabeeld kwam niet op gang';
+      body='De camera startte niet binnen 8 seconden. Sluit het tabblad volledig, open de link opnieuw in Safari en probeer nogmaals.';
     } else if(err && err.message==='no-camera-api'){
       title='Camera niet beschikbaar';
-      body='Deze omgeving geeft geen toegang tot de camera. Host de app via https (bv. GitHub Pages) en open hem op je telefoon.';
+      body='Deze omgeving geeft geen toegang tot de camera. Open de link via https in Safari (niet in een in-app browser).';
     }
+    // toon ook de echte technische fout zodat we kunnen debuggen
+    body += '<br><br><span style="font-size:11px;opacity:.85;">Technisch: '
+         + ((err && (err.name||err.message)) ? (err.name||'') + ' — ' + (err.message||'') : 'onbekend')
+         + '</span>';
     showErr(title, body);
   }
 }
